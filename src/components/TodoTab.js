@@ -1,21 +1,21 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 export default function TodoTab({ data }) {
   const [searchTerm, setSearchTerm] = useState('');
   // 初期状態は「完了以外（残タスク）」を表示
   const [statusFilter, setStatusFilter] = useState('残タスク');
-  // 🌟 追加：対象の複数選択フィルター（空配列＝「すべて」）
+  // 対象の複数選択フィルター（空配列＝「すべて」）
   const [selectedTargets, setSelectedTargets] = useState([]);
-  const [selectedCategory, setSelectedCategory] = useState('すべて');
+  // 🌟 カテゴリをキャラページのガチャと同じドロップダウン方式に変更
+  const [categoryOptions, setCategoryOptions] = useState([]);
+  const [selectedCategories, setSelectedCategories] = useState([]);
+  const [isCategoryMenuOpen, setIsCategoryMenuOpen] = useState(false);
+
   // 並び順：'days'（残日数順） | 'no-asc'（No.昇順） | 'no-desc'（No.降順） | 'priority'（優先度順）
   const [sortBy, setSortBy] = useState('days');
   const [isTwoCol, setIsTwoCol] = useState(true); // 初期2列表示
 
-  if (!data || data.length <= 2) {
-    return <div className="generic-table-wrapper">ToDoデータがありません。</div>;
-  }
-
-  // 🌟 オーブページと完全共通の対象リスト＆並び順
+  // オーブページと完全共通の対象リスト＆並び順
   const GROUP_TARGETS = ['共通', 'メイン,サブ', 'メイン', 'サブ'];
   const ACCOUNT_ORDER = [
     '1', '2', '3', '4',
@@ -25,26 +25,6 @@ export default function TodoTab({ data }) {
     '03', '05', '07',
     '0'
   ];
-
-  // 対象の選択・解除を切り替える関数（複数選択対応）
-  const toggleTarget = (targetName) => {
-    setSelectedTargets((prev) =>
-      prev.includes(targetName)
-        ? prev.filter((t) => t !== targetName)
-        : [...prev, targetName]
-    );
-  };
-
-  // 対象フィルターの一致判定（「2,3,4」などのカンマ区切りにも対応）
-  const matchesTargetFilter = (rawTarget, selectedList) => {
-    if (selectedList.length === 0) return true;
-    if (!rawTarget) return false;
-    if (rawTarget === 'メイン,サブ') {
-      return selectedList.includes('メイン,サブ');
-    }
-    const tokens = rawTarget.split(',').map((s) => s.trim());
-    return selectedList.some((sel) => tokens.includes(sel));
-  };
 
   // 日付から時刻（T15:00:00.000Zなど）を消して「YYYY/MM/DD」に整形する関数
   const formatDate = (val) => {
@@ -67,8 +47,12 @@ export default function TodoTab({ data }) {
     return str;
   };
 
-  // 1. スプレッドシートの3行目以降（インデックス2〜）からタスク一覧を抽出
-  const { tasks, categories } = useMemo(() => {
+  // 1. スプレッドシートの3行目以降（インデックス2〜）からタスク一覧とカテゴリ一覧を抽出
+  const { tasks, extractedCategories } = useMemo(() => {
+    if (!data || data.length <= 2) {
+      return { tasks: [], extractedCategories: [] };
+    }
+
     const list = [];
     const catSet = new Set();
 
@@ -83,7 +67,7 @@ export default function TodoTab({ data }) {
       const rawDays = row[4];               // E列: 残日数
       const priority = row[5] ? row[5].toString().trim() : ''; // F列: 優先度
       const target = row[6] !== null && row[6] !== undefined ? row[6].toString().trim() : ''; // G列: 対象
-      const category = row[7] ? row[7].toString().trim() : ''; // H列: カテゴリ
+      const category = row[7] ? row[7].toString().trim() : '(空白)'; // H列: カテゴリ
       const taskName = row[8] ? row[8].toString().trim() : ''; // I列: タスク
       const status = row[9] ? row[9].toString().trim() : '未着手'; // J列: ステータス
       const note = row[10] ? row[10].toString().trim() : '';   // K列: 備考
@@ -101,7 +85,7 @@ export default function TodoTab({ data }) {
       const prioMatch = priority.match(/\d+/);
       const priorityNum = prioMatch ? Number(prioMatch[0]) : 99;
 
-      if (category) catSet.add(category);
+      catSet.add(category);
 
       list.push({
         id: `${no}-${i}`,
@@ -122,11 +106,41 @@ export default function TodoTab({ data }) {
 
     return {
       tasks: list,
-      categories: ['すべて', ...Array.from(catSet)],
+      extractedCategories: Array.from(catSet),
     };
   }, [data]);
 
-  // 🌟 選択中の「対象」に合わせて上部の集計ボードの件数も連動させる
+  // 🌟 データ読み込み時にカテゴリ選択肢をセット（初期状態はすべて選択）
+  useEffect(() => {
+    setCategoryOptions(extractedCategories);
+    setSelectedCategories(extractedCategories);
+  }, [extractedCategories]);
+
+  if (!data || data.length <= 2) {
+    return <div className="generic-table-wrapper">ToDoデータがありません。</div>;
+  }
+
+  // 対象の選択・解除を切り替える関数（複数選択対応）
+  const toggleTarget = (targetName) => {
+    setSelectedTargets((prev) =>
+      prev.includes(targetName)
+        ? prev.filter((t) => t !== targetName)
+        : [...prev, targetName]
+    );
+  };
+
+  // 対象フィルターの一致判定（「2,3,4」などのカンマ区切りにも対応）
+  const matchesTargetFilter = (rawTarget, selectedList) => {
+    if (selectedList.length === 0) return true;
+    if (!rawTarget) return false;
+    if (rawTarget === 'メイン,サブ') {
+      return selectedList.includes('メイン,サブ');
+    }
+    const tokens = rawTarget.split(',').map((s) => s.trim());
+    return selectedList.some((sel) => tokens.includes(sel));
+  };
+
+  // 選択中の「対象」に合わせて上部の集計ボードの件数も連動させる
   const counts = useMemo(() => {
     let notStarted = 0;
     let inProgress = 0;
@@ -158,11 +172,11 @@ export default function TodoTab({ data }) {
       if (statusFilter === '対応中' && t.status !== '対応中') return false;
       if (statusFilter === '完了' && t.status !== '完了') return false;
 
-      // 🌟 対象絞り込み（複数選択＆カンマ区切り対応）
+      // 対象絞り込み（複数選択＆カンマ区切り対応）
       if (!matchesTargetFilter(t.target, selectedTargets)) return false;
 
-      // カテゴリ絞り込み
-      if (selectedCategory !== 'すべて' && t.category !== selectedCategory) {
+      // 🌟 カテゴリ絞り込み（ドロップダウンのチェックボックス連動）
+      if (!selectedCategories.includes(t.category)) {
         return false;
       }
 
@@ -205,7 +219,7 @@ export default function TodoTab({ data }) {
       }
       return 0;
     });
-  }, [tasks, statusFilter, selectedTargets, selectedCategory, searchTerm, sortBy]);
+  }, [tasks, statusFilter, selectedTargets, selectedCategories, searchTerm, sortBy]);
 
   // 残日数の緊急度に応じたクラス判定
   const getDaysBadgeClass = (days, dueDate, status) => {
@@ -318,24 +332,67 @@ export default function TodoTab({ data }) {
           </div>
         </div>
 
-        {/* ステータスフィルター */}
-        <div className="filter-row" style={{ alignItems: 'center', marginTop: '6px' }}>
-          <span className="filter-label" style={{ width: 'auto', marginTop: 0 }}>表示:</span>
-          <div className="attr-filters">
-            {['残タスク', '未着手', '対応中', '完了', 'すべて'].map((st) => (
-              <button
-                key={st}
-                className={`attr-btn ${statusFilter === st ? 'active' : ''}`}
-                onClick={() => setStatusFilter(st)}
-              >
-                {st === '残タスク' ? '🔥 残タスク(完了以外)' : st}
-              </button>
-            ))}
+        {/* 表示ステータス＆カテゴリ（同じ行に並べてさらに省スペース化！） */}
+        <div className="filter-row" style={{ alignItems: 'center', marginTop: '4px', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span className="filter-label" style={{ width: 'auto', marginTop: 0 }}>表示:</span>
+            <div className="attr-filters">
+              {['残タスク', '未着手', '対応中', '完了', 'すべて'].map((st) => (
+                <button
+                  key={st}
+                  className={`attr-btn ${statusFilter === st ? 'active' : ''}`}
+                  onClick={() => setStatusFilter(st)}
+                >
+                  {st === '残タスク' ? '🔥 残タスク(完了以外)' : st}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 🌟 キャラページのガチャと同じ折りたたみドロップダウン */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
+            <span className="filter-label" style={{ width: 'auto', marginTop: 0 }}>カテゴリ:</span>
+            <button
+              className="dropdown-toggle-btn"
+              onClick={() => setIsCategoryMenuOpen(!isCategoryMenuOpen)}
+            >
+              選択中のカテゴリ: {selectedCategories.length} / {categoryOptions.length} ▼
+            </button>
+            {isCategoryMenuOpen && (
+              <div className="dropdown-menu todo-cat-dropdown">
+                <div className="dropdown-actions">
+                  <button onClick={() => setSelectedCategories(categoryOptions)}>
+                    すべて選択
+                  </button>
+                  <button onClick={() => setSelectedCategories([])}>クリア</button>
+                </div>
+                <div className="dropdown-list">
+                  {categoryOptions.map((cat) => (
+                    <label key={cat} className="dropdown-item">
+                      <input
+                        type="checkbox"
+                        checked={selectedCategories.includes(cat)}
+                        onChange={() => {
+                          if (selectedCategories.includes(cat)) {
+                            setSelectedCategories(
+                              selectedCategories.filter((c) => c !== cat)
+                            );
+                          } else {
+                            setSelectedCategories([...selectedCategories, cat]);
+                          }
+                        }}
+                      />
+                      {cat}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* 🌟 追加：対象フィルター（オーブページと完全同じUI＆複数選択可） */}
-        <div className="filter-row" style={{ alignItems: 'center', marginTop: '4px' }}>
+        {/* 対象フィルター */}
+        <div className="filter-row" style={{ alignItems: 'center', marginTop: '2px' }}>
           <span className="filter-label" style={{ width: 'auto', marginTop: 0 }}>対象:</span>
           <div className="attr-filters" style={{ alignItems: 'center' }}>
             <button
@@ -368,22 +425,6 @@ export default function TodoTab({ data }) {
             ))}
           </div>
         </div>
-
-        {/* カテゴリフィルター */}
-        <div className="filter-row" style={{ alignItems: 'center', marginTop: '4px' }}>
-          <span className="filter-label" style={{ width: 'auto', marginTop: 0 }}>カテゴリ:</span>
-          <div className="attr-filters">
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                className={`attr-btn ${selectedCategory === cat ? 'active' : ''}`}
-                onClick={() => setSelectedCategory(cat)}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
 
       {/* 下部：ToDoカード一覧 */}
@@ -412,7 +453,7 @@ export default function TodoTab({ data }) {
                         優先度: {task.priority}
                       </span>
                     )}
-                    {task.category && (
+                    {task.category && task.category !== '(空白)' && (
                       <span className="todo-cat-badge">{task.category}</span>
                     )}
                     {task.target && (
