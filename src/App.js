@@ -6,22 +6,28 @@ import WakuwakuTab from './components/WakuwakuTab';
 import FormationTab from './components/FormationTab';
 import OrbTab from './components/OrbTab';
 import TodoTab from './components/TodoTab';
+import DailyLogTab, {
+  parseDailyDate,
+  getTodayDateInfo,
+  isMonstDayDate,
+} from './components/DailyLogTab';
 import ChangelogTab, { CHANGELOG_DATA } from './components/ChangelogTab';
 
 // ChangelogTab.js の一番上にある最新バージョンと日付を自動取得
 const LATEST_RELEASE = CHANGELOG_DATA[0] || {
-  version: 'Ver.1.0.0',
-  date: '2026/11/15',
+  version: 'Ver.1.1.0',
+  date: '2026/11/17',
 };
 
-// スプレッドシートの順番に合わせてToDoを先頭に配置
+// スプレッドシートの順番に合わせて配置
 const NAV_ITEMS = [
-  { id: 'ホーム', label: 'ホーム', icon: '🏠', desc: 'メインメニュー・直近ToDo確認' },
+  { id: 'ホーム', label: 'ホーム', icon: '🏠', desc: 'メインメニュー・今日の予定・直近ToDo' },
   { id: 'ToDo', label: 'ToDo', icon: '📋', desc: 'タスク進捗・期限・対象別管理' },
   { id: 'キャラ', label: 'キャラ', icon: '👾', desc: '各アカウントの所持キャラ一覧' },
   { id: '実', label: '厳選', icon: '🍎', desc: 'わくわくの実の厳選状況テーブル' },
   { id: '編成', label: '編成', icon: '⚔️', desc: 'クエスト別の周回・攻略パーティ' },
   { id: 'オーブ', label: 'オーブ', icon: '💎', desc: '各アカウントのオーブ数・増減履歴' },
+  { id: '日別記録', label: '日別記録', icon: '📅', desc: '日ごとのグループ別タスク・消化履歴' },
 ];
 
 export default function App() {
@@ -180,6 +186,45 @@ export default function App() {
     };
   }, [sheetData]);
 
+  // ホーム画面用の「今日やること（日別記録シートの今日分）」抽出
+  const todayDailyData = useMemo(() => {
+    const today = getTodayDateInfo();
+    const isMonstDay = isMonstDayDate(today.year, today.month, today.day);
+    const dailyRaw = sheetData ? sheetData['日別記録'] : null;
+
+    if (!dailyRaw || dailyRaw.length === 0) {
+      return { today, isMonstDay, entries: [] };
+    }
+
+    const headerRow = dailyRaw[0] || [];
+    const defaultShorts = ['Ⅰ', 'Ⅱ', 'Ⅲ', 'Ⅳ', 'Ⅴ'];
+    const colorClasses = ['daily-g1', 'daily-g2', 'daily-g3', 'daily-g4', 'daily-g5'];
+
+    const headers = defaultShorts.map((short, idx) => ({
+      index: idx,
+      full: headerRow[idx + 1] ? headerRow[idx + 1].toString().trim() : short,
+      colorClass: colorClasses[idx],
+    }));
+
+    for (let i = 1; i < dailyRaw.length; i++) {
+      const row = dailyRaw[i];
+      if (!row) continue;
+      const parsed = parseDailyDate(row[0], today.year);
+      if (parsed && parsed.key === today.key) {
+        const entries = headers.map((h) => ({
+          ...h,
+          text:
+            row[h.index + 1] !== null && row[h.index + 1] !== undefined
+              ? row[h.index + 1].toString().trim()
+              : '',
+        }));
+        return { today, isMonstDay, entries };
+      }
+    }
+
+    return { today, isMonstDay, entries: [] };
+  }, [sheetData]);
+
   if (isFirstLoading) {
     return (
       <div className="loading-container">
@@ -203,6 +248,7 @@ export default function App() {
   // ホーム画面（メインメニュー）の描画
   const renderHomeDashboard = () => {
     const sheetButtons = NAV_ITEMS.filter((item) => item.id !== 'ホーム');
+    const hasTodayTasks = todayDailyData.entries.some((e) => e.text !== '');
 
     return (
       <div className="home-wrapper">
@@ -254,7 +300,56 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. 各ページ（シート）への遷移メニュー */}
+        {/* 3. 今日やること（日別記録シート連携） */}
+        <div className="home-section">
+          <div className="home-section-header">
+            <div className="home-today-title-group">
+              <h3 className="home-section-title">
+                📅 今日やること（{todayDailyData.today.label}）
+              </h3>
+              {todayDailyData.isMonstDay && (
+                <span className="daily-monst-badge">🎉 モンストの日</span>
+              )}
+            </div>
+            <button
+              className="home-more-link"
+              onClick={() => handleSelectTab('日別記録')}
+            >
+              日別記録を開く →
+            </button>
+          </div>
+
+          <div
+            className="home-today-card"
+            onClick={() => handleSelectTab('日別記録')}
+          >
+            {hasTodayTasks ? (
+              <div className="daily-group-rows">
+                {todayDailyData.entries.map((entry) => (
+                  <div
+                    key={entry.index}
+                    className={`daily-group-row ${entry.colorClass}`}
+                  >
+                    <span className="daily-group-pill">{entry.full}</span>
+                    <span
+                      className={`daily-group-text ${
+                        !entry.text ? 'empty-text' : ''
+                      }`}
+                    >
+                      {entry.text || '（記載なし）'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="home-today-empty">
+                今日の予定は未入力です（タップして日別記録を見る）
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 4. 各ページ（シート）への遷移メニュー */}
         <div className="home-section">
           <h3 className="home-section-title">📂 シート・ページ一覧</h3>
           <div className="home-nav-list">
@@ -284,7 +379,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* 4. 期限が短いToDoピックアップ */}
+        {/* 5. 期限が短いToDoピックアップ */}
         {dashboardStats && dashboardStats.urgentTasks.length > 0 && (
           <div className="home-section">
             <div className="home-section-header">
@@ -362,6 +457,8 @@ export default function App() {
         return <FormationTab data={sheetData['編成']} />;
       case 'オーブ':
         return <OrbTab data={sheetData['オーブ推移'] || sheetData['オーブ']} />;
+      case '日別記録':
+        return <DailyLogTab data={sheetData['日別記録']} />;
       case '変更履歴':
         return <ChangelogTab />;
       default:
@@ -451,7 +548,7 @@ export default function App() {
               ))}
             </div>
 
-            {/* 🌟 左メニューの一番下に「変更履歴」ボタンを配置 */}
+            {/* 左メニューの一番下に「変更履歴」ボタンを配置 */}
             <div className="drawer-footer">
               <button
                 className={`drawer-changelog-btn ${
