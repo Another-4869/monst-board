@@ -171,8 +171,10 @@ export default function App() {
     // 2. キャラ登録数
     const charRaw = sheetData['キャラ'] || [];
     let charCount = 0;
-    for (let i = 2; i < charRaw.length; i++) {
-      if (charRaw[i] && charRaw[i][2]) charCount++;
+    for (let i = 1; i < charRaw.length; i++) {
+      if (charRaw[i] && charRaw[i][2] && charRaw[i][2].toString().trim() !== '') {
+        charCount++;
+      }
     }
 
     return {
