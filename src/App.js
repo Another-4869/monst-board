@@ -11,13 +11,15 @@ import DailyLogTab, {
   getTodayDateInfo,
   isMonstDayDate,
 } from './components/DailyLogTab';
+import ScheduleTab from './components/ScheduleTab';
 import ChangelogTab, { CHANGELOG_DATA } from './components/ChangelogTab';
 
 // ChangelogTab.js の一番上にある最新バージョンと日付を自動取得
 const LATEST_RELEASE = CHANGELOG_DATA[0] || {
-  version: 'Ver.1.1.0',
-  date: '2026/11/17',
+  version: 'Ver.2.0.0',
+  date: '2026/11/19',
 };
+const IS_V2_RELEASE = /^Ver\.2\./.test(LATEST_RELEASE.version);
 
 // スプレッドシートの順番に合わせて配置
 const NAV_ITEMS = [
@@ -28,6 +30,7 @@ const NAV_ITEMS = [
   { id: '編成', label: '編成', icon: '⚔️', desc: 'クエスト別の周回・攻略パーティ' },
   { id: 'オーブ', label: 'オーブ', icon: '💎', desc: '各アカウントのオーブ数・増減履歴' },
   { id: '日別記録', label: '日別記録', icon: '📅', desc: '日ごとのグループ別タスク・消化履歴' },
+  { id: 'イベント予定', label: 'イベント予定', icon: '🗓️', desc: '公式イベント・定期イベ・ToDo期限カレンダー' },
 ];
 
 export default function App() {
@@ -127,12 +130,18 @@ export default function App() {
       const status = row[9] ? row[9].toString().trim() : '未着手';
       const rawDays = row[4];
       const dueDate = formatDate(row[2]);
-      const target = row[6] !== null && row[6] !== undefined ? row[6].toString().trim() : '';
+      const target =
+        row[6] !== null && row[6] !== undefined ? row[6].toString().trim() : '';
       const category = row[7] ? row[7].toString().trim() : '';
       const priority = row[5] ? row[5].toString().trim() : '';
 
       let remainingDays = null;
-      if (rawDays !== null && rawDays !== undefined && rawDays !== '' && !isNaN(Number(rawDays))) {
+      if (
+        rawDays !== null &&
+        rawDays !== undefined &&
+        rawDays !== '' &&
+        !isNaN(Number(rawDays))
+      ) {
         remainingDays = Number(rawDays);
       }
 
@@ -166,13 +175,18 @@ export default function App() {
     });
 
     const totalTodo = remainingCount + completedCount;
-    const todoRate = totalTodo > 0 ? Math.round((completedCount / totalTodo) * 100) : 0;
+    const todoRate =
+      totalTodo > 0 ? Math.round((completedCount / totalTodo) * 100) : 0;
 
     // 2. キャラ登録数
     const charRaw = sheetData['キャラ'] || [];
     let charCount = 0;
     for (let i = 1; i < charRaw.length; i++) {
-      if (charRaw[i] && charRaw[i][2] && charRaw[i][2].toString().trim() !== '') {
+      if (
+        charRaw[i] &&
+        charRaw[i][2] &&
+        charRaw[i][2].toString().trim() !== ''
+      ) {
         charCount++;
       }
     }
@@ -200,7 +214,13 @@ export default function App() {
 
     const headerRow = dailyRaw[0] || [];
     const defaultShorts = ['Ⅰ', 'Ⅱ', 'Ⅲ', 'Ⅳ', 'Ⅴ'];
-    const colorClasses = ['daily-g1', 'daily-g2', 'daily-g3', 'daily-g4', 'daily-g5'];
+    const colorClasses = [
+      'daily-g1',
+      'daily-g2',
+      'daily-g3',
+      'daily-g4',
+      'daily-g5',
+    ];
 
     const headers = defaultShorts.map((short, idx) => ({
       index: idx,
@@ -259,7 +279,7 @@ export default function App() {
           <h2 className="home-title">モンスト管理ボード</h2>
           <div className="home-meta-row">
             <span
-              className="home-version-badge"
+              className={`home-version-badge ${IS_V2_RELEASE ? 'ver-v2' : ''}`}
               onClick={() => handleSelectTab('変更履歴')}
               style={{ cursor: 'pointer' }}
               title="変更履歴を見る"
@@ -281,13 +301,19 @@ export default function App() {
                 {dashboardStats.remainingCount} <small>件</small>
               </span>
             </div>
-            <div className="home-stat-box urgent" onClick={() => handleSelectTab('ToDo')}>
+            <div
+              className="home-stat-box urgent"
+              onClick={() => handleSelectTab('ToDo')}
+            >
               <span className="home-stat-label">⏰ 7日以内の期限</span>
               <span className="home-stat-num">
                 {dashboardStats.urgentCount} <small>件</small>
               </span>
             </div>
-            <div className="home-stat-box done" onClick={() => handleSelectTab('ToDo')}>
+            <div
+              className="home-stat-box done"
+              onClick={() => handleSelectTab('ToDo')}
+            >
               <span className="home-stat-label">✅ ToDo達成率</span>
               <span className="home-stat-num">
                 {dashboardStats.todoRate} <small>%</small>
@@ -385,7 +411,9 @@ export default function App() {
         {dashboardStats && dashboardStats.urgentTasks.length > 0 && (
           <div className="home-section">
             <div className="home-section-header">
-              <h3 className="home-section-title">⏳ 期限が近いToDo（直近ピックアップ）</h3>
+              <h3 className="home-section-title">
+                ⏳ 期限が近いToDo（直近ピックアップ）
+              </h3>
               <button
                 className="home-more-link"
                 onClick={() => handleSelectTab('ToDo')}
@@ -395,7 +423,8 @@ export default function App() {
             </div>
             <div className="home-urgent-list">
               {dashboardStats.urgentTasks.map((task) => {
-                const isUrgent = task.remainingDays !== null && task.remainingDays <= 7;
+                const isUrgent =
+                  task.remainingDays !== null && task.remainingDays <= 7;
                 return (
                   <div
                     key={task.id}
@@ -409,7 +438,9 @@ export default function App() {
                           <span className="todo-cat-badge">{task.category}</span>
                         )}
                         {task.target && (
-                          <span className="todo-target-badge">対象: {task.target}</span>
+                          <span className="todo-target-badge">
+                            対象: {task.target}
+                          </span>
                         )}
                       </div>
                     </div>
@@ -432,7 +463,9 @@ export default function App() {
                         )}
                       </span>
                       {task.dueDate && (
-                        <span className="home-urgent-date">期限: {task.dueDate}</span>
+                        <span className="home-urgent-date">
+                          期限: {task.dueDate}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -461,6 +494,8 @@ export default function App() {
         return <OrbTab data={sheetData['オーブ推移'] || sheetData['オーブ']} />;
       case '日別記録':
         return <DailyLogTab data={sheetData['日別記録']} />;
+      case 'イベント予定':
+        return <ScheduleTab allData={sheetData} />;
       case '変更履歴':
         return <ChangelogTab />;
       default:
@@ -517,7 +552,9 @@ export default function App() {
             <div className="drawer-header">
               <div>
                 <div className="drawer-title">モンスト管理ボード</div>
-                <div className="drawer-version">
+                <div
+                  className={`drawer-version ${IS_V2_RELEASE ? 'ver-v2' : ''}`}
+                >
                   {LATEST_RELEASE.version} ({LATEST_RELEASE.date})
                 </div>
               </div>
@@ -560,7 +597,11 @@ export default function App() {
               >
                 <span className="drawer-item-icon">🕒</span>
                 <span className="drawer-item-label">変更履歴</span>
-                <span className="drawer-changelog-ver">
+                <span
+                  className={`drawer-changelog-ver ${
+                    IS_V2_RELEASE ? 'ver-v2' : ''
+                  }`}
+                >
                   {LATEST_RELEASE.version}
                 </span>
               </button>
