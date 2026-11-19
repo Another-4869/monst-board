@@ -357,15 +357,18 @@ export default function ScheduleTab({ allData, data }) {
     return generated;
   }, [sheets, rangeStart, rangeEnd, officialEvents]);
 
-  // 3. 表示期間内の全イベントを統合＆カテゴリごとにグループ行を構築
+  // 3. 表示期間内の全イベントを統合＆カテゴリごとにグループ行を構築（終了日時が早い順ソート）
   const { groupedByCategory, totalVisibleCount } = useMemo(() => {
     const merged = [...officialEvents, ...periodicEvents].filter((ev) => {
       if (!enabledCats[ev.category]) return false;
       return ev.end >= rangeStart && ev.start <= rangeEnd;
     });
 
-    // 開始日時順ソート
-    merged.sort((a, b) => a.start - b.start || a.title.localeCompare(b.title));
+    // グループ内アイテムの表示順用に事前ソート
+    merged.sort(
+      (a, b) =>
+        a.end - b.end || a.start - b.start || a.title.localeCompare(b.title)
+    );
 
     const result = {};
     let rowTotal = 0;
@@ -384,12 +387,27 @@ export default function ScheduleTab({ allData, data }) {
             subLabel: ev.sourceLabel,
             isGroup: Boolean(ev.groupName),
             items: [],
+            minStart: ev.start.getTime(),
+            maxEnd: ev.end.getTime(),
           });
         }
-        rowsMap.get(rowKey).items.push(ev);
+        const entry = rowsMap.get(rowKey);
+        entry.items.push(ev);
+        if (ev.start.getTime() < entry.minStart) {
+          entry.minStart = ev.start.getTime();
+        }
+        if (ev.end.getTime() > entry.maxEnd) {
+          entry.maxEnd = ev.end.getTime();
+        }
       });
 
-      const rowsArr = Array.from(rowsMap.values());
+      // デフォルト並び順：終了日時が早い順 → 開始日時が早い順 → タイトル順
+      const rowsArr = Array.from(rowsMap.values()).sort(
+        (a, b) =>
+          a.maxEnd - b.maxEnd ||
+          a.minStart - b.minStart ||
+          a.label.localeCompare(b.label)
+      );
       result[key] = rowsArr;
       rowTotal += rowsArr.length;
     });
