@@ -2184,6 +2184,19 @@
     color: #e5e7eb;
   }
   
+  /* 週表示・月表示のときはページ全体を1画面に収め、外側のスクロールを発生させない */
+  .schedule-container:has(.schedule-gantt-wrapper) {
+    height: calc(100dvh - 120px);
+    gap: 10px;
+  }
+  
+  .schedule-header,
+  .schedule-controls,
+  .schedule-filter-bar,
+  .schedule-footer-note {
+    flex-shrink: 0;
+  }
+  
   .schedule-header {
     display: flex;
     flex-wrap: wrap;
@@ -2286,7 +2299,7 @@
     justify-content: space-between;
     align-items: center;
     gap: 10px;
-    padding: 4px 2px;
+    padding: 2px 2px;
   }
   
   .schedule-filters {
@@ -2330,13 +2343,34 @@
   .attr-light { background: #a16207; border-color: #facc15; color: #fefce8; }
   .attr-dark { background: #6b21a8; border-color: #c084fc; color: #faf5ff; }
   
-  /* ガントチャート本体（縦スクロール時に日付ヘッダーを上部に固定） */
+  /* ガントチャート本体（残り高さを自動計算して枠内スクロール＋日付ヘッダー固定） */
   .schedule-gantt-wrapper {
-    max-height: calc(100vh - 210px);
+    flex: 1;
+    min-height: 0;
     overflow: auto;
     background: #0f141e;
     border: 1px solid #263042;
     border-radius: 12px;
+    scrollbar-width: thin;
+    scrollbar-color: #334155 #0f141e;
+  }
+  
+  .schedule-gantt-wrapper::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  .schedule-gantt-wrapper::-webkit-scrollbar-track {
+    background: #0f141e;
+  }
+  
+  .schedule-gantt-wrapper::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 4px;
+  }
+  
+  .schedule-gantt-wrapper::-webkit-scrollbar-thumb:hover {
+    background: #475569;
   }
   
   .sch-gantt-header-row {
@@ -2736,29 +2770,6 @@
     padding: 2px 4px;
   }
   
-  /* ========== 右下フローティング「今日へ戻る」ボタン ========== */
-  .sch-floating-today-btn {
-    position: fixed;
-    right: 24px;
-    bottom: 24px;
-    z-index: 900;
-    background: linear-gradient(135deg, #f97316, #ea580c);
-    color: #ffffff;
-    border: 1px solid #fb923c;
-    border-radius: 999px;
-    padding: 10px 18px;
-    font-size: 0.88rem;
-    font-weight: 700;
-    cursor: pointer;
-    box-shadow: 0 8px 24px rgba(234, 88, 12, 0.45);
-    transition: transform 0.15s, filter 0.15s;
-  }
-  
-  .sch-floating-today-btn:hover {
-    filter: brightness(1.1);
-    transform: translateY(-2px);
-  }
-  
   /* ========== モーダル ========== */
   .sch-modal-overlay {
     position: fixed;
@@ -2916,6 +2927,16 @@
   }
   
   /* スマホ向け幅調整 */
+  @media (max-width: 768px) {
+    .schedule-container:has(.schedule-gantt-wrapper) {
+      height: auto;
+    }
+    .schedule-gantt-wrapper {
+      flex: none;
+      max-height: 70dvh;
+    }
+  }
+  
   @media (max-width: 640px) {
     .sch-label-col {
       width: 138px;
@@ -2925,11 +2946,5 @@
     .sch-daily-group-tag {
       min-width: 96px;
       font-size: 0.7rem;
-    }
-    .sch-floating-today-btn {
-      right: 16px;
-      bottom: 16px;
-      padding: 9px 15px;
-      font-size: 0.82rem;
     }
   }

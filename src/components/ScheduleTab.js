@@ -191,12 +191,6 @@ export default function ScheduleTab({ allData, data }) {
     return Array.from({ length: lastDay }, (_, i) => new Date(y, m, i + 1));
   }, [viewMode, anchorDate]);
 
-  // 現在の表示範囲に「今日」が含まれているか
-  const isTodayInRange = useMemo(
-    () => visibleDays.some((d) => toDateKey(d) === todayKey),
-    [visibleDays, todayKey]
-  );
-
   const rangeStart = visibleDays[0];
   const rangeEnd = useMemo(() => {
     const last = visibleDays[visibleDays.length - 1];
@@ -968,17 +962,6 @@ export default function ScheduleTab({ allData, data }) {
             </div>
           </div>
         </div>
-      )}
-
-      {/* 今日が画面外にあるときだけ右下に常時浮かぶ「今日へ戻る」ボタン */}
-      {!isTodayInRange && (
-        <button
-          type="button"
-          className="sch-floating-today-btn"
-          onClick={goToday}
-        >
-          📅 今日へ戻る
-        </button>
       )}
     </div>
   );
