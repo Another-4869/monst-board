@@ -4,6 +4,7 @@ import { parseDailyDate } from './DailyLogTab';
 // カテゴリ定義（表示順＆色）
 const CATEGORIES = [
   { key: 'クエスト', label: 'クエスト', colorClass: 'cat-quest' },
+  { key: 'コラボ', label: 'コラボ', colorClass: 'cat-collab' },
   { key: 'ガチャ', label: 'ガチャ', colorClass: 'cat-gacha' },
   { key: 'キャンペーン', label: 'キャンペーン', colorClass: 'cat-campaign' },
   { key: 'その他', label: 'その他', colorClass: 'cat-other' },
@@ -153,6 +154,7 @@ export default function ScheduleTab({ allData, data }) {
   const [anchorDate, setAnchorDate] = useState(() => startOfDay(new Date()));
   const [enabledCats, setEnabledCats] = useState({
     クエスト: true,
+    コラボ: true,
     ガチャ: true,
     キャンペーン: true,
     その他: true,
@@ -293,22 +295,33 @@ export default function ScheduleTab({ allData, data }) {
     const generated = [];
 
     templates.forEach((tpl, tIdx) => {
+      const isTenma = tpl.name.includes('天魔');
+
       monthPairs.forEach(({ y, m }) => {
         const lastDayOfStart = new Date(y, m + 1, 0).getDate();
-        const sDay = Math.min(tpl.startDayNum, lastDayOfStart);
-        const start = new Date(y, m, sDay, 12, 0, 0);
-
+        let start;
         let end;
-        if (tpl.endDayNum >= tpl.startDayNum) {
-          const eDay = Math.min(tpl.endDayNum, lastDayOfStart);
-          end = new Date(y, m, eDay, 11, 59, 0);
+
+        if (isTenma) {
+          // 天魔の孤城のみ：毎月1日 00:00 ～ その月の末日 23:59
+          start = new Date(y, m, 1, 0, 0, 0);
+          end = new Date(y, m, lastDayOfStart, 23, 59, 0);
         } else {
-          // 月またぎ（例: 21日 ～ 翌月8日）
-          const ny = m === 11 ? y + 1 : y;
-          const nm = m === 11 ? 0 : m + 1;
-          const lastDayOfEnd = new Date(ny, nm + 1, 0).getDate();
-          const eDay = Math.min(tpl.endDayNum, lastDayOfEnd);
-          end = new Date(ny, nm, eDay, 11, 59, 0);
+          // その他の定期イベント：開始日 12:00 ～ 終了日 11:59
+          const sDay = Math.min(tpl.startDayNum, lastDayOfStart);
+          start = new Date(y, m, sDay, 12, 0, 0);
+
+          if (tpl.endDayNum >= tpl.startDayNum) {
+            const eDay = Math.min(tpl.endDayNum, lastDayOfStart);
+            end = new Date(y, m, eDay, 11, 59, 0);
+          } else {
+            // 月またぎ（例: 21日 ～ 翌月8日）
+            const ny = m === 11 ? y + 1 : y;
+            const nm = m === 11 ? 0 : m + 1;
+            const lastDayOfEnd = new Date(ny, nm + 1, 0).getDate();
+            const eDay = Math.min(tpl.endDayNum, lastDayOfEnd);
+            end = new Date(ny, nm, eDay, 11, 59, 0);
+          }
         }
 
         // 表示期間と重ならないものはスキップ
@@ -647,10 +660,12 @@ export default function ScheduleTab({ allData, data }) {
             </div>
           )}
 
-          {/* カテゴリ別イベント一覧 */}
+          {/* カテゴリ別イベント一覧（コラボ非開催時は非表示） */}
           {CATEGORIES.filter((c) => enabledCats[c.key]).map((cat) => {
             const rows = groupedByCategory[cat.key] || [];
             const flatEvents = rows.flatMap((r) => r.items);
+            if (cat.key === 'コラボ' && flatEvents.length === 0) return null;
+
             return (
               <div key={cat.key} className="sch-day-section">
                 <div className={`sch-cat-banner ${cat.colorClass}`}>
@@ -747,9 +762,11 @@ export default function ScheduleTab({ allData, data }) {
               </div>
             </div>
 
-            {/* カテゴリ別ブロック */}
+            {/* カテゴリ別ブロック（コラボ非開催時は非表示） */}
             {CATEGORIES.filter((c) => enabledCats[c.key]).map((cat) => {
               const rows = groupedByCategory[cat.key] || [];
+              if (cat.key === 'コラボ' && rows.length === 0) return null;
+
               return (
                 <div key={cat.key} className="sch-gantt-category">
                   <div className={`sch-cat-banner ${cat.colorClass}`}>
@@ -843,7 +860,7 @@ export default function ScheduleTab({ allData, data }) {
 
       {/* フッター注記 */}
       <div className="schedule-footer-note">
-        <span>青＝クエスト / 橙＝ガチャ / 緑＝キャンペーン / 紫＝その他（書庫は属性5色）。</span>
+        <span>青＝クエスト / 黄＝コラボ / 橙＝ガチャ / 緑＝キャンペーン / 紫＝その他（書庫は属性5色）。</span>
         <span>日付をクリックすると「日表示」へ切り替え、バーや📋をクリックすると詳細を確認できます。</span>
       </div>
 

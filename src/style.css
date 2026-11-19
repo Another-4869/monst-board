@@ -2333,7 +2333,8 @@
   
   /* カテゴリ＆属性カラー */
   .cat-quest { background: #1d4ed8; border-color: #3b82f6; color: #eff6ff; }
-  .cat-gacha { background: #b45309; border-color: #f59e0b; color: #fffbeb; }
+  .cat-collab { background: #8f7a1c; border-color: #eab308; color: #fefce8; }
+  .cat-gacha { background: #c2410c; border-color: #fb923c; color: #fff7ed; }
   .cat-campaign { background: #15803d; border-color: #22c55e; color: #f0fdf4; }
   .cat-other { background: #6d28d9; border-color: #a855f7; color: #faf5ff; }
   
@@ -2499,7 +2500,8 @@
   }
   
   .sch-cat-banner.cat-quest { background: rgba(29, 78, 216, 0.32); color: #93c5fd; }
-  .sch-cat-banner.cat-gacha { background: rgba(180, 83, 9, 0.34); color: #fcd34d; }
+  .sch-cat-banner.cat-collab { background: rgba(202, 138, 4, 0.28); color: #fde047; }
+  .sch-cat-banner.cat-gacha { background: rgba(194, 65, 12, 0.34); color: #fdba74; }
   .sch-cat-banner.cat-campaign { background: rgba(21, 128, 61, 0.32); color: #86efac; }
   .sch-cat-banner.cat-other { background: rgba(109, 40, 217, 0.32); color: #d8b4fe; }
   
