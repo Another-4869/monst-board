@@ -30,6 +30,13 @@ const GROUP_LABELS = [
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
 
+// 検索用の文字列正規化（大文字小文字・全角半角の揺れを吸収）
+function normalizeSearchText(str) {
+  return String(str || '')
+    .normalize('NFKC')
+    .toLowerCase();
+}
+
 // 日時文字列・Date・ISO文字列を安全にDateへ変換
 function parseSheetDate(val) {
   if (!val) return null;
@@ -160,6 +167,7 @@ export default function ScheduleTab({ allData, data }) {
     その他: true,
   });
   const [showTodoBadges, setShowTodoBadges] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedTodoDay, setSelectedTodoDay] = useState(null);
 
@@ -176,6 +184,7 @@ export default function ScheduleTab({ allData, data }) {
   }, []);
 
   const todayKey = useMemo(() => toDateKey(new Date()), []);
+  const isSearching = searchQuery.trim().length > 0;
 
   // 表示する日付配列を計算
   const visibleDays = useMemo(() => {
@@ -415,6 +424,29 @@ export default function ScheduleTab({ allData, data }) {
     return { groupedByCategory: result, totalVisibleCount: rowTotal };
   }, [officialEvents, periodicEvents, enabledCats, rangeStart, rangeEnd]);
 
+  // 3.5 全期間キーワード検索（過去〜未来の公式イベントを新しい開催順で抽出）
+  const searchResults = useMemo(() => {
+    const trimmed = searchQuery.trim();
+    if (!trimmed) return [];
+
+    const tokens = normalizeSearchText(trimmed)
+      .split(/\s+/)
+      .filter(Boolean);
+
+    return officialEvents
+      .filter((ev) => {
+        if (!enabledCats[ev.category]) return false;
+        const haystack = normalizeSearchText(
+          `${ev.title} ${ev.groupName} ${ev.category} ${ev.attrColor}`
+        );
+        return tokens.every((tk) => haystack.includes(tk));
+      })
+      .sort(
+        (a, b) =>
+          b.start - a.start || b.end - a.end || a.title.localeCompare(b.title)
+      );
+  }, [searchQuery, officialEvents, enabledCats]);
+
   // 4. 「ToDo」シートから期限日ありの未完了タスクを日付別にマップ化（App.jsと同一の列定義）
   const todosByDate = useMemo(() => {
     const rows = sheets['ToDo'] || [];
@@ -508,7 +540,16 @@ export default function ScheduleTab({ allData, data }) {
     setAnchorDate((prev) => addDays(prev, delta));
   };
 
-  const goToday = () => setAnchorDate(startOfDay(new Date()));
+  const goToday = () => {
+    setSearchQuery('');
+    setAnchorDate(startOfDay(new Date()));
+  };
+
+  const jumpToEventWeek = (ev) => {
+    setAnchorDate(startOfDay(ev.start));
+    setViewMode('week');
+    setSearchQuery('');
+  };
 
   const toggleCategory = (key) => {
     setEnabledCats((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -537,6 +578,17 @@ export default function ScheduleTab({ allData, data }) {
     }
     const found = CATEGORIES.find((c) => c.key === ev.category);
     return found ? found.colorClass : 'cat-other';
+  };
+
+  const getEventStatusInfo = (ev) => {
+    const nowTime = Date.now();
+    if (ev.end.getTime() < nowTime) {
+      return { label: '終了', className: 'is-ended' };
+    }
+    if (ev.start.getTime() > nowTime) {
+      return { label: '開催予定', className: 'is-upcoming' };
+    }
+    return { label: '開催中', className: 'is-active' };
   };
 
   const dayTodos = todosByDate[toDateKey(anchorDate)] || [];
@@ -582,31 +634,42 @@ export default function ScheduleTab({ allData, data }) {
           )}
         </div>
 
-        <div className="schedule-period-label">{periodHeading}</div>
+        <div className="schedule-period-label">
+          {isSearching ? `🔍 全期間検索` : periodHeading}
+        </div>
 
         <div className="schedule-view-switch">
           <button
-            className={`sch-mode-btn ${viewMode === 'day' ? 'active' : ''}`}
-            onClick={() => setViewMode('day')}
+            className={`sch-mode-btn ${!isSearching && viewMode === 'day' ? 'active' : ''}`}
+            onClick={() => {
+              setSearchQuery('');
+              setViewMode('day');
+            }}
           >
             日表示
           </button>
           <button
-            className={`sch-mode-btn ${viewMode === 'week' ? 'active' : ''}`}
-            onClick={() => setViewMode('week')}
+            className={`sch-mode-btn ${!isSearching && viewMode === 'week' ? 'active' : ''}`}
+            onClick={() => {
+              setSearchQuery('');
+              setViewMode('week');
+            }}
           >
             週表示
           </button>
           <button
-            className={`sch-mode-btn ${viewMode === 'month' ? 'active' : ''}`}
-            onClick={() => setViewMode('month')}
+            className={`sch-mode-btn ${!isSearching && viewMode === 'month' ? 'active' : ''}`}
+            onClick={() => {
+              setSearchQuery('');
+              setViewMode('month');
+            }}
           >
             月表示
           </button>
         </div>
       </div>
 
-      {/* カテゴリフィルター */}
+      {/* カテゴリフィルター＆全期間キーワード検索 */}
       <div className="schedule-filter-bar">
         <div className="schedule-filters">
           {CATEGORIES.map((cat) => (
@@ -629,11 +692,109 @@ export default function ScheduleTab({ allData, data }) {
             <span>📋 ToDo期限</span>
           </label>
         </div>
-        <div className="schedule-count-label">{totalVisibleCount}件表示</div>
+
+        <div className="schedule-filter-right">
+          <div className="sch-search-box">
+            <span className="sch-search-icon">🔍</span>
+            <input
+              type="text"
+              className="sch-search-input"
+              placeholder="全期間検索（例: STARLIGHT、書庫）"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="sch-search-clear"
+                onClick={() => setSearchQuery('')}
+                aria-label="検索をクリア"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <div className="schedule-count-label">
+            {isSearching ? `${searchResults.length}件ヒット` : `${totalVisibleCount}件表示`}
+          </div>
+        </div>
       </div>
 
-      {/* ========== 日表示モード（スマホ最適＋日別記録 Ⅰ〜Ⅴ 表示） ========== */}
-      {viewMode === 'day' ? (
+      {/* ========== 全期間検索結果ビュー ========== */}
+      {isSearching ? (
+        <div className="schedule-search-view">
+          <div className="sch-search-header">
+            <div className="sch-search-summary">
+              <strong>「{searchQuery.trim()}」</strong>の全期間検索結果：
+              <strong>{searchResults.length}件</strong>（新しい開催順）
+            </div>
+            <button
+              type="button"
+              className="sch-search-reset-btn"
+              onClick={() => setSearchQuery('')}
+            >
+              ✕ カレンダーに戻る
+            </button>
+          </div>
+
+          {searchResults.length === 0 ? (
+            <div className="sch-search-empty">
+              該当するイベントが見つかりませんでした（上のカテゴリチェックが外れていないかもご確認ください）。
+            </div>
+          ) : (
+            <div className="sch-search-list">
+              {searchResults.map((ev) => {
+                const status = getEventStatusInfo(ev);
+                return (
+                  <div
+                    key={ev.id}
+                    className="sch-search-card"
+                    onClick={() => setSelectedEvent(ev)}
+                  >
+                    <div className="sch-search-card-main">
+                      <div className="sch-search-badges">
+                        <span className={`sch-modal-badge ${getBarColorClass(ev)}`}>
+                          {ev.category}
+                        </span>
+                        {ev.attrColor && (
+                          <span
+                            className={`sch-modal-badge ${ATTR_COLOR_MAP[ev.attrColor]}`}
+                          >
+                            {ev.attrColor}属性
+                          </span>
+                        )}
+                        <span className={`sch-status-badge ${status.className}`}>
+                          {status.label}
+                        </span>
+                      </div>
+                      <div className="sch-search-title">
+                        {ev.groupName ? `${ev.groupName}：${ev.title}` : ev.title}
+                      </div>
+                      <div className="sch-search-time">
+                        {formatDateTime(ev.start)} 〜 {formatDateTime(ev.end)}
+                      </div>
+                    </div>
+
+                    <div className="sch-search-card-actions">
+                      <button
+                        type="button"
+                        className="sch-jump-week-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          jumpToEventWeek(ev);
+                        }}
+                      >
+                        📅 開催週へ
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : viewMode === 'day' ? (
+        /* ========== 日表示モード（スマホ最適＋日別記録 Ⅰ〜Ⅴ 表示） ========== */
         <div className="schedule-day-view">
           {/* 日別記録（日表示のときだけ表示） */}
           <div className="sch-day-card sch-daily-log-card">
