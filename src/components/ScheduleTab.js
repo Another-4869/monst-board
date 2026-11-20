@@ -30,6 +30,27 @@ const GROUP_LABELS = [
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
 
+// 1行目の見出し名から列インデックスを自動判別（列順を入れ替えても壊れない）
+function resolveEventColMap(headerRow) {
+  const headers = (headerRow || []).map((v) => String(v || '').trim());
+  const findIdx = (regex, fallback) => {
+    const idx = headers.findIndex((h) => regex.test(h));
+    return idx !== -1 ? idx : fallback;
+  };
+  return {
+    category: findIdx(/^カテゴリ$/, 0),
+    title: findIdx(/^イベント名$/, 1),
+    start: findIdx(/^開始日時$/, 2),
+    end: findIdx(/^終了日時$/, 3),
+    url: findIdx(/^情報元URL$/, 4),
+    fetched: findIdx(/^最終取得日時$/, 5),
+    groupName: findIdx(/^親グループ名$/, 6),
+    attrColor: findIdx(/^属性カラー$/, 7),
+    todoCheck: findIdx(/^ToDo化$/, 8),
+    todoNo: findIdx(/^連携ToDo/, 9),
+  };
+}
+
 // 検索用の文字列正規化（大文字小文字・全角半角の揺れを吸収）
 function normalizeSearchText(str) {
   return String(str || '')
@@ -44,13 +65,11 @@ function parseSheetDate(val) {
   const str = String(val).trim();
   if (!str) return null;
 
-  // ISO形式 (GASのJSON変換結果: 2026-11-19T03:00:00.000Z 等)
   if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
     const d = new Date(str);
     return isNaN(d.getTime()) ? null : d;
   }
 
-  // 日本語スラッシュ/ハイフン形式 (2026/11/19 12:00 / 2026/11/19 等)
   const m = str.match(
     /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:[\sT]+(\d{1,2}):(\d{2}))?/
   );
@@ -97,10 +116,9 @@ function addDays(d, days) {
   return res;
 }
 
-// 月曜始まりの週初日を取得
 function getMonday(d) {
   const base = startOfDay(d);
-  const day = base.getDay(); // 0=日, 1=月...
+  const day = base.getDay();
   const diff = day === 0 ? -6 : 1 - day;
   return addDays(base, diff);
 }
@@ -124,13 +142,10 @@ function calcHalfDayRange(evStart, evEnd, rangeStartDate, totalDays) {
 
   let rawEndSlotExclusive;
   if (endH === 0 && endM === 0) {
-    // ちょうど0:00終了なら前日末まで
     rawEndSlotExclusive = endDiff * 2;
   } else if (endH < 12 || (endH === 12 && endM === 0)) {
-    // 11:59（または12:00ちょうど）終了 → 午前枠（真ん中）まで
     rawEndSlotExclusive = endDiff * 2 + 1;
   } else {
-    // 午後（23:59等）終了 → 当日の右端まで
     rawEndSlotExclusive = endDiff * 2 + 2;
   }
 
@@ -167,6 +182,7 @@ export default function ScheduleTab({ allData, data }) {
     その他: true,
   });
   const [showTodoBadges, setShowTodoBadges] = useState(true);
+  const [hideDoneEvents, setHideDoneEvents] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedTodoDay, setSelectedTodoDay] = useState(null);
@@ -195,7 +211,6 @@ export default function ScheduleTab({ allData, data }) {
       const mon = getMonday(anchorDate);
       return Array.from({ length: 7 }, (_, i) => addDays(mon, i));
     }
-    // month
     const y = anchorDate.getFullYear();
     const m = anchorDate.getMonth();
     const lastDay = new Date(y, m + 1, 0).getDate();
@@ -216,29 +231,121 @@ export default function ScheduleTab({ allData, data }) {
     );
   }, [visibleDays]);
 
-  // 1. 「イベント予定」シートから公式イベントを読み込み
+  // 0. 「ToDo」シートを全件読み込み（日付別マップ＋No.別マップを同時構築）
+  const { todosByDate, todosByNo } = useMemo(() => {
+    const rows = sheets['ToDo'] || [];
+    if (rows.length < 3) return { todosByDate: {}, todosByNo: {} };
+
+    const byDate = {};
+    const byNo = {};
+
+    for (let i = 2; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+
+      const noStr =
+        row[0] !== null && row[0] !== undefined ? String(row[0]).trim() : '';
+      const title = row[8] ? String(row[8]).trim() : '';
+      if (!title && !noStr) continue;
+
+      const status = row[9] ? String(row[9]).trim() : '未着手';
+      const doneDate = row[3];
+      const isDone =
+        status === '完了' ||
+        (doneDate !== '' && doneDate !== null && doneDate !== undefined);
+
+      const rawDue = row[2];
+      const deadline =
+        rawDue && String(rawDue).trim() !== '無期限'
+          ? parseSheetDate(rawDue)
+          : null;
+
+      const todoObj = {
+        id: `todo-${i}`,
+        no: noStr,
+        title,
+        deadline,
+        category: row[7] ? String(row[7]).trim() : '',
+        target:
+          row[6] !== null && row[6] !== undefined ? String(row[6]).trim() : '',
+        status,
+        isDone,
+      };
+
+      if (noStr) {
+        byNo[noStr] = todoObj;
+      }
+
+      if (!isDone && title && deadline) {
+        const dKey = toDateKey(deadline);
+        if (!byDate[dKey]) byDate[dKey] = [];
+        byDate[dKey].push(todoObj);
+      }
+    }
+
+    return { todosByDate: byDate, todosByNo: byNo };
+  }, [sheets]);
+
+  // 1. 「イベント予定」シートから公式イベントを読み込み（見出し名で列位置を自動解決）
   const { officialEvents, lastFetchedText } = useMemo(() => {
     const rows = sheets['イベント予定'] || [];
+    if (rows.length < 2) return { officialEvents: [], lastFetchedText: '' };
+
+    const colMap = resolveEventColMap(rows[0]);
     const list = [];
     let latestFetched = '';
 
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || !row[1]) continue;
-      const category = String(row[0] || 'その他').trim();
-      const title = String(row[1] || '').trim();
-      const start = parseSheetDate(row[2]);
-      const end = parseSheetDate(row[3]);
-      const url = String(row[4] || '').trim();
-      const fetched = parseSheetDate(row[5]);
-      const groupName = String(row[6] || '').trim();
-      const attrColor = String(row[7] || '').trim();
+      if (!row || !row[colMap.title]) continue;
+      const category = String(row[colMap.category] || 'その他').trim();
+      const title = String(row[colMap.title] || '').trim();
+      const start = parseSheetDate(row[colMap.start]);
+      const end = parseSheetDate(row[colMap.end]);
+      const url = String(row[colMap.url] || '').trim();
+      const fetched = parseSheetDate(row[colMap.fetched]);
+      const groupName = String(row[colMap.groupName] || '').trim();
+      const attrColor = String(row[colMap.attrColor] || '').trim();
+      const rawCheck = row[colMap.todoCheck];
+      const todoChecked =
+        rawCheck === true || String(rawCheck || '').trim().toUpperCase() === 'TRUE';
+      const rawLinkedNo = row[colMap.todoNo];
+      const linkedNoRaw =
+        rawLinkedNo !== null && rawLinkedNo !== undefined
+          ? String(rawLinkedNo).trim()
+          : '';
 
       if (!start || !end) continue;
 
       if (fetched) {
         const fStr = formatDateTime(fetched);
         if (!latestFetched || fStr > latestFetched) latestFetched = fStr;
+      }
+
+      const linkedNos = linkedNoRaw
+        ? linkedNoRaw
+            .split(/[,、\s]+/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+      const linkedTodos = linkedNos.map((n) => todosByNo[n]).filter(Boolean);
+
+      let todoState = 'none';
+      let todoStatusLabel = '';
+
+      if (linkedTodos.length > 0) {
+        if (linkedTodos.every((t) => t.isDone)) {
+          todoState = 'done';
+          todoStatusLabel = '完了';
+        } else {
+          todoState = 'active';
+          todoStatusLabel = linkedTodos.some((t) => t.status === '対応中')
+            ? '対応中'
+            : 'ToDo';
+        }
+      } else if (todoChecked) {
+        todoState = 'pending';
+        todoStatusLabel = 'ToDo';
       }
 
       list.push({
@@ -252,10 +359,14 @@ export default function ScheduleTab({ allData, data }) {
         attrColor,
         sourceLabel: '公式発表',
         isPeriodic: false,
+        todoChecked,
+        linkedTodos,
+        todoState,
+        todoStatusLabel,
       });
     }
     return { officialEvents: list, lastFetchedText: latestFetched };
-  }, [sheets]);
+  }, [sheets, todosByNo]);
 
   // 2. 「予定」シートから定期イベを生成し、公式イベントと重複するサイクルは除外
   const periodicEvents = useMemo(() => {
@@ -266,8 +377,8 @@ export default function ScheduleTab({ allData, data }) {
       const row = rows[i];
       if (!row) continue;
       const name = String(row[1] || '').trim();
-      const startDayNum = Number(row[7]); // H列: 始
-      const endDayNum = Number(row[8]); // I列: 終
+      const startDayNum = Number(row[7]);
+      const endDayNum = Number(row[8]);
       if (
         !name ||
         !startDayNum ||
@@ -282,7 +393,6 @@ export default function ScheduleTab({ allData, data }) {
 
     if (templates.length === 0) return [];
 
-    // 表示範囲の前後1ヶ月分のサイクルを生成（月またぎ対応）
     const startMonthCursor = new Date(
       rangeStart.getFullYear(),
       rangeStart.getMonth() - 1,
@@ -312,11 +422,9 @@ export default function ScheduleTab({ allData, data }) {
         let end;
 
         if (isTenma) {
-          // 天魔の孤城のみ：毎月1日 00:00 ～ その月の末日 23:59
           start = new Date(y, m, 1, 0, 0, 0);
           end = new Date(y, m, lastDayOfStart, 23, 59, 0);
         } else {
-          // その他の定期イベント：開始日 12:00 ～ 終了日 11:59
           const sDay = Math.min(tpl.startDayNum, lastDayOfStart);
           start = new Date(y, m, sDay, 12, 0, 0);
 
@@ -324,7 +432,6 @@ export default function ScheduleTab({ allData, data }) {
             const eDay = Math.min(tpl.endDayNum, lastDayOfStart);
             end = new Date(y, m, eDay, 11, 59, 0);
           } else {
-            // 月またぎ（例: 21日 ～ 翌月8日）
             const ny = m === 11 ? y + 1 : y;
             const nm = m === 11 ? 0 : m + 1;
             const lastDayOfEnd = new Date(ny, nm + 1, 0).getDate();
@@ -333,10 +440,8 @@ export default function ScheduleTab({ allData, data }) {
           }
         }
 
-        // 表示期間と重ならないものはスキップ
         if (end < rangeStart || start > rangeEnd) return;
 
-        // 重複チェック：公式イベントに同じ定期イベ＆期間重複がある場合は公式を優先
         const isDuplicatedWithOfficial = officialEvents.some((off) => {
           const overlaps = off.start <= end && off.end >= start;
           if (!overlaps) return false;
@@ -359,6 +464,10 @@ export default function ScheduleTab({ allData, data }) {
           attrColor: '',
           sourceLabel: '定期イベント（予定シート）',
           isPeriodic: true,
+          todoChecked: false,
+          linkedTodos: [],
+          todoState: 'none',
+          todoStatusLabel: '',
         });
       });
     });
@@ -366,14 +475,13 @@ export default function ScheduleTab({ allData, data }) {
     return generated;
   }, [sheets, rangeStart, rangeEnd, officialEvents]);
 
-  // 3. 表示期間内の全イベントを統合＆カテゴリごとにグループ行を構築（終了日時が早い順ソート）
-  const { groupedByCategory, totalVisibleCount } = useMemo(() => {
+  // 3. 表示期間内の全イベントを統合＆カテゴリごとにグループ行を構築
+  const { groupedByCategory, totalVisibleCount, hiddenDoneCount } = useMemo(() => {
     const merged = [...officialEvents, ...periodicEvents].filter((ev) => {
       if (!enabledCats[ev.category]) return false;
       return ev.end >= rangeStart && ev.start <= rangeEnd;
     });
 
-    // グループ内アイテムの表示順用に事前ソート
     merged.sort(
       (a, b) =>
         a.end - b.end || a.start - b.start || a.title.localeCompare(b.title)
@@ -381,13 +489,13 @@ export default function ScheduleTab({ allData, data }) {
 
     const result = {};
     let rowTotal = 0;
+    let hiddenDone = 0;
 
     CATEGORIES.forEach(({ key }) => {
       const catEvents = merged.filter((e) => e.category === key);
       const rowsMap = new Map();
 
       catEvents.forEach((ev) => {
-        // 親グループ名（G列）があれば同じ1行にまとめる
         const rowKey = ev.groupName ? `group::${ev.groupName}` : `single::${ev.id}`;
         if (!rowsMap.has(rowKey)) {
           rowsMap.set(rowKey, {
@@ -410,21 +518,60 @@ export default function ScheduleTab({ allData, data }) {
         }
       });
 
-      // デフォルト並び順：終了日時が早い順 → 開始日時が早い順 → タイトル順
-      const rowsArr = Array.from(rowsMap.values()).sort(
-        (a, b) =>
+      let rowsArr = Array.from(rowsMap.values()).map((row) => {
+        const allDone =
+          row.items.length > 0 && row.items.every((it) => it.todoState === 'done');
+        const anyActive = row.items.some((it) => it.todoState === 'active');
+        const anyPending = row.items.some((it) => it.todoState === 'pending');
+
+        let todoState = 'none';
+        let todoStatusLabel = '';
+        if (allDone) {
+          todoState = 'done';
+          todoStatusLabel = '完了';
+        } else if (anyActive) {
+          todoState = 'active';
+          todoStatusLabel = row.items.some((it) => it.todoStatusLabel === '対応中')
+            ? '対応中'
+            : 'ToDo';
+        } else if (anyPending) {
+          todoState = 'pending';
+          todoStatusLabel = 'ToDo';
+        }
+
+        return { ...row, todoState, todoStatusLabel };
+      });
+
+      if (hideDoneEvents) {
+        const beforeLen = rowsArr.length;
+        rowsArr = rowsArr.filter((r) => r.todoState !== 'done');
+        hiddenDone += beforeLen - rowsArr.length;
+      }
+
+      // 並び順：未完了が上・完了済みがカテゴリ最下部 → 終了日時が早い順 → 開始日時が早い順 → タイトル順
+      rowsArr.sort((a, b) => {
+        const aDone = a.todoState === 'done' ? 1 : 0;
+        const bDone = b.todoState === 'done' ? 1 : 0;
+        if (aDone !== bDone) return aDone - bDone;
+        return (
           a.maxEnd - b.maxEnd ||
           a.minStart - b.minStart ||
           a.label.localeCompare(b.label)
-      );
+        );
+      });
+
       result[key] = rowsArr;
       rowTotal += rowsArr.length;
     });
 
-    return { groupedByCategory: result, totalVisibleCount: rowTotal };
-  }, [officialEvents, periodicEvents, enabledCats, rangeStart, rangeEnd]);
+    return {
+      groupedByCategory: result,
+      totalVisibleCount: rowTotal,
+      hiddenDoneCount: hiddenDone,
+    };
+  }, [officialEvents, periodicEvents, enabledCats, hideDoneEvents, rangeStart, rangeEnd]);
 
-  // 3.5 全期間キーワード検索（過去〜未来の公式イベントを新しい開催順で抽出）
+  // 3.5 全期間キーワード検索
   const searchResults = useMemo(() => {
     const trimmed = searchQuery.trim();
     if (!trimmed) return [];
@@ -436,6 +583,7 @@ export default function ScheduleTab({ allData, data }) {
     return officialEvents
       .filter((ev) => {
         if (!enabledCats[ev.category]) return false;
+        if (hideDoneEvents && ev.todoState === 'done') return false;
         const haystack = normalizeSearchText(
           `${ev.title} ${ev.groupName} ${ev.category} ${ev.attrColor}`
         );
@@ -445,52 +593,9 @@ export default function ScheduleTab({ allData, data }) {
         (a, b) =>
           b.start - a.start || b.end - a.end || a.title.localeCompare(b.title)
       );
-  }, [searchQuery, officialEvents, enabledCats]);
+  }, [searchQuery, officialEvents, enabledCats, hideDoneEvents]);
 
-  // 4. 「ToDo」シートから期限日ありの未完了タスクを日付別にマップ化（App.jsと同一の列定義）
-  const todosByDate = useMemo(() => {
-    const rows = sheets['ToDo'] || [];
-    if (rows.length < 3) return {};
-
-    const map = {};
-    for (let i = 2; i < rows.length; i++) {
-      const row = rows[i];
-      if (!row) continue;
-
-      const title = row[8] ? String(row[8]).trim() : '';
-      if (!title) continue;
-
-      const status = row[9] ? String(row[9]).trim() : '未着手';
-      const doneDate = row[3];
-      if (
-        status === '完了' ||
-        (doneDate !== '' && doneDate !== null && doneDate !== undefined)
-      ) {
-        continue;
-      }
-
-      const rawDue = row[2];
-      if (!rawDue || String(rawDue).trim() === '無期限') continue;
-
-      const deadline = parseSheetDate(rawDue);
-      if (!deadline) continue;
-
-      const dKey = toDateKey(deadline);
-      if (!map[dKey]) map[dKey] = [];
-      map[dKey].push({
-        id: `todo-${i}`,
-        title,
-        deadline,
-        category: row[7] ? String(row[7]).trim() : '',
-        target:
-          row[6] !== null && row[6] !== undefined ? String(row[6]).trim() : '',
-        status,
-      });
-    }
-    return map;
-  }, [sheets]);
-
-  // 5. 「日別記録」シートから日表示用の Ⅰ〜Ⅴ データを取得（DailyLogTabと同一の日付パース）
+  // 4. 「日別記録」シートから日表示用の Ⅰ〜Ⅴ データを取得
   const dailyLogForAnchor = useMemo(() => {
     if (viewMode !== 'day') return null;
     const rows = sheets['日別記録'] || [];
@@ -555,7 +660,6 @@ export default function ScheduleTab({ allData, data }) {
     setEnabledCats((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // 期間タイトルテキスト
   const periodHeading = useMemo(() => {
     const first = visibleDays[0];
     const last = visibleDays[visibleDays.length - 1];
@@ -573,10 +677,18 @@ export default function ScheduleTab({ allData, data }) {
   }, [viewMode, visibleDays]);
 
   const getBarColorClass = (ev) => {
+    if (ev.todoState === 'done') {
+      return 'cat-done';
+    }
     if (ev.attrColor && ATTR_COLOR_MAP[ev.attrColor]) {
       return ATTR_COLOR_MAP[ev.attrColor];
     }
     const found = CATEGORIES.find((c) => c.key === ev.category);
+    return found ? found.colorClass : 'cat-other';
+  };
+
+  const getCategoryColorOnly = (category) => {
+    const found = CATEGORIES.find((c) => c.key === category);
     return found ? found.colorClass : 'cat-other';
   };
 
@@ -591,6 +703,27 @@ export default function ScheduleTab({ allData, data }) {
     return { label: '開催中', className: 'is-active' };
   };
 
+  const renderTodoLinkBadge = (todoState, todoStatusLabel) => {
+    if (todoState === 'done') {
+      return (
+        <span className="sch-todo-link-badge is-done" title="紐づくToDoは完了済み">
+          ✅ 完了
+        </span>
+      );
+    }
+    if (todoState === 'active' || todoState === 'pending') {
+      return (
+        <span
+          className="sch-todo-link-badge is-active"
+          title="ToDoシートに登録済み"
+        >
+          📋 {todoStatusLabel || 'ToDo'}
+        </span>
+      );
+    }
+    return null;
+  };
+
   const dayTodos = todosByDate[toDateKey(anchorDate)] || [];
 
   return (
@@ -600,7 +733,7 @@ export default function ScheduleTab({ allData, data }) {
         <div>
           <h2 className="schedule-title">🗓️ イベント予定</h2>
           <p className="schedule-subtitle">
-            公式発表・定期イベ（予定シート）・ToDo期限をまとめて確認（0〜12時 / 12〜24時分割）
+            公式発表・定期イベ（予定シート）・ToDo進捗をまとめて確認（0〜12時 / 12〜24時分割）
           </p>
         </div>
         {lastFetchedText && (
@@ -691,6 +824,14 @@ export default function ScheduleTab({ allData, data }) {
             />
             <span>📋 ToDo期限</span>
           </label>
+          <label className="sch-filter-chip sch-filter-hide-done">
+            <input
+              type="checkbox"
+              checked={hideDoneEvents}
+              onChange={() => setHideDoneEvents((v) => !v)}
+            />
+            <span>✅ 完了を隠す</span>
+          </label>
         </div>
 
         <div className="schedule-filter-right">
@@ -715,7 +856,11 @@ export default function ScheduleTab({ allData, data }) {
             )}
           </div>
           <div className="schedule-count-label">
-            {isSearching ? `${searchResults.length}件ヒット` : `${totalVisibleCount}件表示`}
+            {isSearching
+              ? `${searchResults.length}件ヒット`
+              : hiddenDoneCount > 0
+              ? `${totalVisibleCount}件表示（完了${hiddenDoneCount}件非表示）`
+              : `${totalVisibleCount}件表示`}
           </div>
         </div>
       </div>
@@ -739,7 +884,7 @@ export default function ScheduleTab({ allData, data }) {
 
           {searchResults.length === 0 ? (
             <div className="sch-search-empty">
-              該当するイベントが見つかりませんでした（上のカテゴリチェックが外れていないかもご確認ください）。
+              該当するイベントが見つかりませんでした（上のフィルター設定もご確認ください）。
             </div>
           ) : (
             <div className="sch-search-list">
@@ -748,12 +893,18 @@ export default function ScheduleTab({ allData, data }) {
                 return (
                   <div
                     key={ev.id}
-                    className="sch-search-card"
+                    className={`sch-search-card ${
+                      ev.todoState === 'done' ? 'is-done' : ''
+                    }`}
                     onClick={() => setSelectedEvent(ev)}
                   >
                     <div className="sch-search-card-main">
                       <div className="sch-search-badges">
-                        <span className={`sch-modal-badge ${getBarColorClass(ev)}`}>
+                        <span
+                          className={`sch-modal-badge ${getCategoryColorOnly(
+                            ev.category
+                          )}`}
+                        >
                           {ev.category}
                         </span>
                         {ev.attrColor && (
@@ -766,6 +917,7 @@ export default function ScheduleTab({ allData, data }) {
                         <span className={`sch-status-badge ${status.className}`}>
                           {status.label}
                         </span>
+                        {renderTodoLinkBadge(ev.todoState, ev.todoStatusLabel)}
                       </div>
                       <div className="sch-search-title">
                         {ev.groupName ? `${ev.groupName}：${ev.title}` : ev.title}
@@ -796,7 +948,6 @@ export default function ScheduleTab({ allData, data }) {
       ) : viewMode === 'day' ? (
         /* ========== 日表示モード（スマホ最適＋日別記録 Ⅰ〜Ⅴ 表示） ========== */
         <div className="schedule-day-view">
-          {/* 日別記録（日表示のときだけ表示） */}
           <div className="sch-day-card sch-daily-log-card">
             <div className="sch-day-card-header">
               <span>
@@ -819,7 +970,6 @@ export default function ScheduleTab({ allData, data }) {
             </div>
           </div>
 
-          {/* その日が期限のToDo */}
           {showTodoBadges && dayTodos.length > 0 && (
             <div className="sch-day-card sch-day-todo-card">
               <div className="sch-day-card-header">
@@ -839,7 +989,6 @@ export default function ScheduleTab({ allData, data }) {
             </div>
           )}
 
-          {/* カテゴリ別イベント一覧（コラボ非開催時は非表示） */}
           {CATEGORIES.filter((c) => enabledCats[c.key]).map((cat) => {
             const rows = groupedByCategory[cat.key] || [];
             const flatEvents = rows.flatMap((r) => r.items);
@@ -863,9 +1012,13 @@ export default function ScheduleTab({ allData, data }) {
                       >
                         <div className="sch-day-ev-top">
                           <span className="sch-day-ev-title">
+                            {ev.todoState === 'done' ? '✅ ' : ''}
                             {ev.groupName ? `${ev.groupName}：${ev.title}` : ev.title}
                           </span>
-                          <span className="sch-day-ev-source">{ev.sourceLabel}</span>
+                          <div className="sch-day-ev-right-meta">
+                            {renderTodoLinkBadge(ev.todoState, ev.todoStatusLabel)}
+                            <span className="sch-day-ev-source">{ev.sourceLabel}</span>
+                          </div>
                         </div>
                         <div className="sch-day-ev-time">
                           {formatDateTime(ev.start)} 〜 {formatDateTime(ev.end)}
@@ -956,8 +1109,13 @@ export default function ScheduleTab({ allData, data }) {
                     <div className="sch-empty-row">この期間に確認済みの予定はありません</div>
                   ) : (
                     rows.map((row) => (
-                      <div key={row.rowKey} className="sch-gantt-row">
-                        {/* 左固定：イベント名 */}
+                      <div
+                        key={row.rowKey}
+                        className={`sch-gantt-row ${
+                          row.todoState === 'done' ? 'is-done-row' : ''
+                        }`}
+                      >
+                        {/* 左固定：イベント名＋ToDo連携バッジ */}
                         <div
                           className="sch-label-col sch-row-label"
                           onClick={() => {
@@ -967,12 +1125,14 @@ export default function ScheduleTab({ allData, data }) {
                           <div className="sch-row-title" title={row.label}>
                             {row.label}
                           </div>
-                          <div className="sch-row-sub">{row.subLabel}</div>
+                          <div className="sch-row-sub-line">
+                            <span className="sch-row-sub">{row.subLabel}</span>
+                            {renderTodoLinkBadge(row.todoState, row.todoStatusLabel)}
+                          </div>
                         </div>
 
                         {/* 右側：タイムライン＋バー描画 */}
                         <div className="sch-timeline-area">
-                          {/* 背景の日付＋12時グリッド */}
                           <div
                             className="sch-timeline-bg"
                             style={{
@@ -994,7 +1154,6 @@ export default function ScheduleTab({ allData, data }) {
                             })}
                           </div>
 
-                          {/* イベントバー本体 */}
                           <div className="sch-bars-layer">
                             {row.items.map((ev) => {
                               const pos = calcHalfDayRange(
@@ -1021,7 +1180,9 @@ export default function ScheduleTab({ allData, data }) {
                                   )}`}
                                   onClick={() => setSelectedEvent(ev)}
                                 >
-                                  <span className="sch-bar-text">{ev.title}</span>
+                                  <span className="sch-bar-text">
+                                    {ev.todoState === 'done' ? `✅ ${ev.title}` : ev.title}
+                                  </span>
                                 </button>
                               );
                             })}
@@ -1039,8 +1200,8 @@ export default function ScheduleTab({ allData, data }) {
 
       {/* フッター注記 */}
       <div className="schedule-footer-note">
-        <span>青＝クエスト / 黄＝コラボ / 橙＝ガチャ / 緑＝キャンペーン / 紫＝その他（書庫は属性5色）。</span>
-        <span>日付をクリックすると「日表示」へ切り替え、バーや📋をクリックすると詳細を確認できます。</span>
+        <span>青＝クエスト / 黄＝コラボ / 橙＝ガチャ / 緑＝キャンペーン / 紫＝その他 / 灰＝ToDo完了済（書庫は属性5色）。</span>
+        <span>日付クリックで「日表示」、バー・📋クリックで詳細を確認できます。</span>
       </div>
 
       {/* イベント詳細モーダル */}
@@ -1063,7 +1224,11 @@ export default function ScheduleTab({ allData, data }) {
             </div>
 
             <div className="sch-modal-badges">
-              <span className={`sch-modal-badge ${getBarColorClass(selectedEvent)}`}>
+              <span
+                className={`sch-modal-badge ${getCategoryColorOnly(
+                  selectedEvent.category
+                )}`}
+              >
                 {selectedEvent.category}
               </span>
               {selectedEvent.attrColor && (
@@ -1076,6 +1241,10 @@ export default function ScheduleTab({ allData, data }) {
               <span className="sch-modal-badge sch-badge-muted">
                 {selectedEvent.sourceLabel}
               </span>
+              {renderTodoLinkBadge(
+                selectedEvent.todoState,
+                selectedEvent.todoStatusLabel
+              )}
             </div>
 
             <div className="sch-modal-body">
@@ -1087,6 +1256,24 @@ export default function ScheduleTab({ allData, data }) {
                 <strong>終了：</strong>
                 <span>{formatDateTime(selectedEvent.end)}（日本時間）</span>
               </div>
+
+              {selectedEvent.linkedTodos && selectedEvent.linkedTodos.length > 0 && (
+                <div className="sch-modal-linked-todos">
+                  <div className="sch-modal-linked-heading">📋 連携中のToDo</div>
+                  {selectedEvent.linkedTodos.map((t) => (
+                    <div
+                      key={t.id}
+                      className={`sch-modal-linked-item ${t.isDone ? 'is-done' : ''}`}
+                    >
+                      <span className="sch-linked-no">No.{t.no}</span>
+                      <span className="sch-linked-status">
+                        {t.isDone ? '✅ 完了' : t.status}
+                      </span>
+                      <span className="sch-linked-title">{t.title}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {selectedEvent.url ? (
                 <a
